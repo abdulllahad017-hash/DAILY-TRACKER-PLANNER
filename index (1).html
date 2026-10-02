@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily Time Planner</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef2f6;--card:#fff;--ink:#14233a;--mut:#5d6b80;--acc:#2548d6;--warn:#c2410c;--line:#d8e0ea}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1826;--card:#18253a;--ink:#e8eef8;--mut:#93a3bb;--acc:#7b9bff;--warn:#fb923c;--line:#2a3a54}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Archivo,system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:1.1rem;font-weight:600;margin:0 0 16px;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+#left{font-size:clamp(3rem,16vw,5.5rem);font-weight:800;line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+#left.over{color:var(--warn)}
+.sub{color:var(--mut);margin:6px 0 14px}
+.bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
+form{display:flex;flex-wrap:wrap;gap:8px}
+input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;min-width:0}
+input:focus-visible,button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.name{flex:1 1 100%}.num{width:84px}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 16px;cursor:pointer;background:var(--acc);color:#fff}
+@media(prefers-color-scheme:dark){button{color:#0f1826}}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button.x{padding:4px 10px;background:transparent;color:var(--mut);border:1px solid var(--line)}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+li:last-child{border:0}
+li b{flex:1;font-weight:600;word-break:break-word}
+li span{color:var(--mut);font-variant-numeric:tabular-nums}
+.empty{color:var(--mut)}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+[hidden]{display:none!important}
+h2{font-size:1.05rem;margin:0 0 8px}
+.cut{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed var(--line)}
+.settings{display:flex;align-items:center;gap:8px;color:var(--mut);font-size:.9rem}
+.settings input{width:72px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Daily Time Planner</h1>
+
+  <section class="card">
+    <div id="left">24h 0m</div>
+    <p class="sub" id="sub">left today</p>
+    <div class="bar"><i id="fill"></i></div>
+    <div class="settings" style="margin-top:14px">
+      <label for="total">Hours in my day</label>
+      <input id="total" type="number" min="1" max="24" step="1" value="24">
+    </div>
+  </section>
+
+  <section class="card">
+    <form id="addForm">
+      <input class="name" id="tName" placeholder="What will you do? (e.g. Sleep, Study, Gym)" required maxlength="60">
+      <input class="num" id="tH" type="number" min="0" max="24" placeholder="Hours" aria-label="Hours">
+      <input class="num" id="tM" type="number" min="0" max="59" placeholder="Minutes" aria-label="Minutes">
+      <button type="submit">Add to my day</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <ul id="list"></ul>
+    <div class="row">
+      <button id="finish">I'm done planning</button>
+      <button class="ghost" id="reset">Clear all</button>
+    </div>
+  </section>
+
+  <section class="card" id="ask" hidden>
+    <h2>Do you want to add something more?</h2>
+    <form id="moreForm">
+      <input class="name" id="mName" placeholder="What else?" required maxlength="60">
+      <input class="num" id="mH" type="number" min="0" max="24" placeholder="Hours" aria-label="Hours">
+      <input class="num" id="mM" type="number" min="0" max="59" placeholder="Minutes" aria-label="Minutes">
+      <button type="submit">Add it</button>
+      <button type="button" class="ghost" id="noMore">No, I'm good</button>
+    </form>
+  </section>
+
+  <section class="card" id="sug" hidden>
+    <h2 id="sugTitle"></h2>
+    <div id="cuts"></div>
+    <div class="row">
+      <button id="yes">Yes, take the time</button>
+      <button class="ghost" id="no">No, keep my plan</button>
+    </div>
+  </section>
+
+  <p id="msg" class="sub" role="status"></p>
+</main>
+
+<script>
+(function(){
+  var KEY = "daily-time-planner-v1";
+  var MIN_KEEP = 15; // never trim a task below 15 minutes
+  var state = { totalH: 24, tasks: [] };
+  var pending = null; // { name, min, cuts: [{id, take}] }
+
+  try { var s = JSON.parse(localStorage.getItem(KEY)); if (s && s.tasks) state = s; } catch (e) {}
+  function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+  var $ = function(id){ return document.getElementById(id); };
+  function fmt(m){ var h = Math.floor(Math.abs(m)/60), r = Math.abs(m)%60; return (m<0?"-":"") + h + "h " + r + "m"; }
+  function used(){ return state.tasks.reduce(function(a,t){ return a + t.min; }, 0); }
+  function total(){ return state.totalH * 60; }
+  function left(){ return total() - used(); }
+  function say(t){ $("msg").textContent = t || ""; }
+  function minsFrom(h, m){ return (parseInt(h,10)||0)*60 + (parseInt(m,10)||0); }
+
+  function render(){
+    var l = left();
+    $("left").textContent = fmt(l);
+    $("left").className = l < 0 ? "over" : "";
+    $("sub").textContent = l < 0 ? "over your day" : "left today (" + fmt(used()) + " planned)";
+    $("fill").style.width = Math.min(100, used()/total()*100) + "%";
+    $("total").value = state.totalH;
+    var ul = $("list"); ul.innerHTML = "";
+    if (!state.tasks.length){
+      var e = document.createElement("li"); e.className = "empty"; e.textContent = "Nothing planned yet. Add your first task above."; ul.appendChild(e);
+    }
+    state.tasks.forEach(function(t){
+      var li = document.createElement("li");
+      var b = document.createElement("b"); b.textContent = t.name;
+      var sp = document.createElement("span"); sp.textContent = fmt(t.min);
+      var x = document.createElement("button"); x.className = "x"; x.textContent = "Remove"; x.setAttribute("aria-label","Remove " + t.name);
+      x.onclick = function(){ state.tasks = state.tasks.filter(function(k){ return k.id !== t.id; }); save(); render(); say("Removed " + t.name + ". " + fmt(left()) + " left."); };
+      li.appendChild(b); li.appendChild(sp); li.appendChild(x); ul.appendChild(li);
+    });
+  }
+
+  function addTask(name, min){
+    state.tasks.push({ id: Date.now() + Math.random(), name: name, min: min });
+    save(); render();
+  }
+
+  // Work out which existing tasks could give up time (largest first, keep >= MIN_KEEP each)
+  function planCuts(need){
+    var sorted = state.tasks.slice().sort(function(a,b){ return b.min - a.min; });
+    var cuts = [];
+    sorted.forEach(function(t){
+      if (need <= 0) return;
+      var give = Math.floor((t.min - MIN_KEEP)/5)*5;
+      if (give <= 0) return;
+      var take = Math.min(give, Math.ceil(need/5)*5);
+      cuts.push({ id: t.id, name: t.name, take: take });
+      need -= take;
+    });
+    return { cuts: cuts, short: Math.max(0, need) };
+  }
+
+  function request(name, min){
+    $("sug").hidden = true; pending = null;
+    var l = left();
+    if (min <= l){ addTask(name, min); say("Added " + name + ". " + fmt(left()) + " left."); return true; }
+    var need = min - Math.max(0, l);
+    var p = planCuts(need);
+    if (p.short > 0){
+      say("Not enough time: " + name + " needs " + fmt(min) + " but only " + fmt(Math.max(0,l)) + " is free and your other tasks can't give up " + fmt(need) + ". Try a shorter time.");
+      return false;
+    }
+    pending = { name: name, min: min, cuts: p.cuts };
+    $("sugTitle").textContent = "Only " + fmt(Math.max(0,l)) + " is free. Take " + fmt(need) + " from these to fit " + name + "?";
+    var box = $("cuts"); box.innerHTML = "";
+    p.cuts.forEach(function(c){
+      var d = document.createElement("div"); d.className = "cut";
+      var a = document.createElement("span"); a.textContent = c.name;
+      var b = document.createElement("span"); b.textContent = "-" + fmt(c.take);
+      d.appendChild(a); d.appendChild(b); box.appendChild(d);
+    });
+    $("sug").hidden = false;
+    say("");
+    return false;
+  }
+
+  $("addForm").onsubmit = function(ev){
+    ev.preventDefault();
+    var min = minsFrom($("tH").value, $("tM").value);
+    if (min <= 0){ say("Enter at least 1 minute."); return; }
+    if (request($("tName").value.trim(), min)) { $("addForm").reset(); }
+  };
+
+  $("moreForm").onsubmit = function(ev){
+    ev.preventDefault();
+    var min = minsFrom($("mH").value, $("mM").value);
+    if (min <= 0){ say("Enter at least 1 minute."); return; }
+    if (request($("mName").value.trim(), min)) { $("moreForm").reset(); }
+  };
+
+  $("yes").onclick = function(){
+    if (!pending) return;
+    pending.cuts.forEach(function(c){
+      var t = state.tasks.filter(function(k){ return k.id === c.id; })[0];
+      if (t) t.min -= c.take;
+    });
+    addTask(pending.name, pending.min);
+    say("Done. Trimmed your plan and added " + pending.name + ". " + fmt(left()) + " left.");
+    pending = null; $("sug").hidden = true;
+    $("addForm").reset(); $("moreForm").reset();
+  };
+
+  $("no").onclick = function(){
+    pending = null; $("sug").hidden = true;
+    say("No changes made. Your plan stays as it was.");
+  };
+
+  $("finish").onclick = function(){
+    if (!state.tasks.length){ say("Add at least one task first."); return; }
+    $("ask").hidden = false;
+    say(left() > 0 ? fmt(left()) + " is still unplanned." : "Your day is fully booked.");
+    $("ask").scrollIntoView({ behavior: "smooth" });
+  };
+
+  $("noMore").onclick = function(){ $("ask").hidden = true; say("Plan saved. Have a great day!"); };
+
+  $("total").onchange = function(){
+    var h = Math.max(1, Math.min(24, parseInt($("total").value,10) || 24));
+    state.totalH = h; save(); render();
+    say(left() < 0 ? "Your tasks now exceed your day. Remove or shorten something." : "");
+  };
+
+  $("reset").onclick = function(){
+    if (!confirm("Clear every task?")) return;
+    state.tasks = []; pending = null; $("sug").hidden = true; $("ask").hidden = true;
+    save(); render(); say("Cleared.");
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>
